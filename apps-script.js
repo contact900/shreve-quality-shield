@@ -60,6 +60,19 @@ var SHEET_INSPECTIONS = 'Inspections'
 var SHEET_ASSETS      = 'Assets'
 var SHEET_INVENTORY   = 'Inventory'
 
+var LOCATIONS_LIST = [
+  'Stribling Swepco',
+  'Rogers Swepco',
+  'Fayetteville Swepco',
+  'Springdale Swepco',
+  'Greenwood Swepco',
+  'Fayetteville BofA',
+  'Springdale BofA',
+  'Rogers BofA',
+  'Fort Smith Merrill Lynch',
+  'CSL Plasma',
+]
+
 
 // ── Entry point ───────────────────────────────────────────────────────────────
 
@@ -94,11 +107,197 @@ function doPost(e) {
   }
 }
 
-/** Health check — paste the web app URL in a browser to verify it's live */
-function doGet() {
+/**
+ * GET endpoint.
+ *   No params  → health check (browser-friendly text)
+ *   ?action=dashboard → returns JSON summary of all facilities for the Manager Dashboard
+ */
+function doGet(e) {
+  var params = (e && e.parameter) ? e.parameter : {}
+
+  if (params.action === 'dashboard') {
+    try {
+      var payload = buildDashboardData()
+      return ContentService
+        .createTextOutput(JSON.stringify(payload))
+        .setMimeType(ContentService.MimeType.JSON)
+    } catch (err) {
+      Logger.log('doGet dashboard error: ' + err.message)
+      return ContentService
+        .createTextOutput(JSON.stringify({ error: err.message }))
+        .setMimeType(ContentService.MimeType.JSON)
+    }
+  }
+
   return ContentService
     .createTextOutput('Shreve Quality Shield v2 API is live.')
     .setMimeType(ContentService.MimeType.TEXT)
+}
+
+
+// ── Manager Dashboard data builder ────────────────────────────────────────────
+
+/**
+ * Reads the Inspections, Assets, and Inventory sheets and returns a JSON
+ * object that the Manager Dashboard frontend can render directly.
+ *
+ * Returns:
+ * {
+ *   generated: ISO timestamp,
+ *   facilities: [
+ *     {
+ *       location:       string,
+ *       status:         'green' | 'yellow' | 'red' | 'unknown',
+ *       lastInspection: { date, grade, totalScore } | null,
+ *       inventoryDate:  string | null,
+ *       inventory:      [{ id, label, unit, min, count, isAlert }],
+ *       equipment:      [{ id, condition, workingProperly, filterNeeded, lastInspected, notes }],
+ *     },
+ *     …
+ *   ]
+ * }
+ */
+function buildDashboardData() {
+  var ss = SpreadsheetApp.getActiveSpreadsheet()
+
+  // ── 1. Latest inventory record per location ──────────────────────────────
+  var invByLocation = {}
+  var invSheet = ss.getSheetByName(SHEET_INVENTORY)
+  if (invSheet && invSheet.getLastRow() > 1) {
+    var invRows = invSheet.getRange(2, 1, invSheet.getLastRow() - 1, 11).getValues()
+    for (var i = 0; i < invRows.length; i++) {
+      var r = invRows[i]
+      var loc = r[3]
+      var ts  = r[0]
+      if (!invByLocation[loc] || ts > invByLocation[loc].ts) {
+        invByLocation[loc] = {
+          ts:            ts,
+          date:          r[1] instanceof Date ? Utilities.formatDate(r[1], SCRIPT_TZ, 'MM/dd/yyyy') : String(r[1]),
+          multi_surface: Number(r[4]) || 0,
+          paper_towels:  Number(r[5]) || 0,
+          liners:        Number(r[6]) || 0,
+          disinfectant:  Number(r[7]) || 0,
+        }
+      }
+    }
+  }
+
+  // ── 2. Latest asset scan per equipment ID, grouped by location ───────────
+  var assetsByEquipId  = {}
+  var assetSheet = ss.getSheetByName(SHEET_ASSETS)
+  if (assetSheet && assetSheet.getLastRow() > 1) {
+    var assetRows = assetSheet.getRange(2, 1, assetSheet.getLastRow() - 1, 10).getValues()
+    for (var j = 0; j < assetRows.length; j++) {
+      var ar      = assetRows[j]
+      var equipId = String(ar[3])
+      var ts2     = ar[0]
+      if (!assetsByEquipId[equipId] || ts2 > assetsByEquipId[equipId].ts) {
+        assetsByEquipId[equipId] = {
+          ts:             ts2,
+          lastInspected:  ar[1] instanceof Date ? Utilities.formatDate(ar[1], SCRIPT_TZ, 'MM/dd/yyyy') : String(ar[1]),
+          id:             equipId,
+          location:       String(ar[4]),
+          condition:      String(ar[5]),
+          filterNeeded:   ar[6] === 'YES',
+          workingProperly: ar[7] === 'YES',
+          notes:          String(ar[8] || ''),
+        }
+      }
+    }
+  }
+
+  // Group assets by location
+  var assetsByLocation = {}
+  for (var eid in assetsByEquipId) {
+    var asset = assetsByEquipId[eid]
+    var aloc  = asset.location
+    if (!assetsByLocation[aloc]) assetsByLocation[aloc] = []
+    assetsByLocation[aloc].push(asset)
+  }
+
+  // ── 3. Latest inspection per location ────────────────────────────────────
+  var inspByLocation = {}
+  var inspSheet = ss.getSheetByName(SHEET_INSPECTIONS)
+  if (inspSheet && inspSheet.getLastRow() > 1) {
+    var inspRows = inspSheet.getRange(2, 1, inspSheet.getLastRow() - 1, 38).getValues()
+    for (var k = 0; k < inspRows.length; k++) {
+      var ir  = inspRows[k]
+      var iloc = String(ir[4])
+      var its  = ir[0]
+      if (!inspByLocation[iloc] || its > inspByLocation[iloc].ts) {
+        inspByLocation[iloc] = {
+          ts:         its,
+          date:       ir[1] instanceof Date ? Utilities.formatDate(ir[1], SCRIPT_TZ, 'MM/dd/yyyy') : String(ir[1]),
+          grade:      String(ir[19] || 'N/A'),
+          totalScore: Number(ir[17]) || 0,
+          averageScore: String(ir[18] || '0'),
+        }
+      }
+    }
+  }
+
+  // ── 4. Build facility summaries ───────────────────────────────────────────
+  var facilities = LOCATIONS_LIST.map(function(location) {
+    var inv    = invByLocation[location]
+    var assets = assetsByLocation[location] || []
+    var insp   = inspByLocation[location]
+
+    // Supply snapshot
+    var supplyItems = SUPPLY_ITEMS.map(function(item) {
+      var count = inv ? (inv[item.id] !== undefined ? inv[item.id] : null) : null
+      return {
+        id:      item.id,
+        label:   item.label,
+        unit:    item.unit,
+        min:     item.min,
+        count:   count,
+        isAlert: count !== null && count < item.min,
+      }
+    })
+
+    // Equipment list (strip internal ts field)
+    var equipmentList = assets.map(function(a) {
+      return {
+        id:             a.id,
+        condition:      a.condition,
+        workingProperly: a.workingProperly,
+        filterNeeded:   a.filterNeeded,
+        lastInspected:  a.lastInspected,
+        notes:          a.notes,
+      }
+    })
+
+    // Status logic
+    var hasReorderAlert = supplyItems.some(function(s) { return s.isAlert })
+    var hasEquipIssue   = assets.some(function(a) { return !a.workingProperly })
+    var hasPoorCondition = assets.some(function(a) { return a.condition === 'Poor' })
+    var hasFairCondition = assets.some(function(a) { return a.condition === 'Fair' })
+
+    var status = 'unknown'
+    if (inv !== undefined || assets.length > 0) {
+      if (hasReorderAlert || hasEquipIssue) {
+        status = 'red'
+      } else if (hasPoorCondition || hasFairCondition) {
+        status = 'yellow'
+      } else {
+        status = 'green'
+      }
+    }
+
+    return {
+      location:       location,
+      status:         status,
+      lastInspection: insp ? { date: insp.date, grade: insp.grade, totalScore: insp.totalScore } : null,
+      inventoryDate:  inv ? inv.date : null,
+      inventory:      supplyItems,
+      equipment:      equipmentList,
+    }
+  })
+
+  return {
+    generated:  new Date().toISOString(),
+    facilities: facilities,
+  }
 }
 
 
