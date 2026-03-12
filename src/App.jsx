@@ -4,8 +4,9 @@ import ScoreItem    from './components/ScoreItem'
 import GpsCapture   from './components/GpsCapture'
 import Toggle       from './components/Toggle'
 import ScoreSummary from './components/ScoreSummary'
-import QRScanner    from './components/QRScanner'
-import Inventory    from './components/Inventory'
+import QRScanner        from './components/QRScanner'
+import Inventory        from './components/Inventory'
+import ManagerDashboard from './components/ManagerDashboard'
 
 // ── Constants ────────────────────────────────────────────────────────────────
 
@@ -95,6 +96,7 @@ const TABS = [
   { id: 'inspection', label: 'Inspection', icon: '🛡️' },
   { id: 'equipment',  label: 'Equipment',  icon: '🔍' },
   { id: 'inventory',  label: 'Inventory',  icon: '📦' },
+  { id: 'dashboard',  label: 'Dashboard',  icon: '📊' },
 ]
 
 function TabBar({ active, onChange }) {
@@ -453,6 +455,7 @@ export default function App() {
       {activeTab === 'inspection' && <InspectionTab onSuccess={handleInspectionSuccess} />}
       {activeTab === 'equipment'  && <QRScanner />}
       {activeTab === 'inventory'  && <Inventory />}
+      {activeTab === 'dashboard'  && <ManagerDashboard />}
     </div>
   )
 }
