@@ -285,7 +285,7 @@ export default function ManagerDashboard() {
   const fetchDashboard = useCallback(async () => {
     if (!WEBHOOK_URL) {
       setLoadState('error')
-      setErrorMsg('VITE_WEBHOOK_URL is not configured. Set it in your .env file to connect to Google Sheets.')
+      setErrorMsg('no-url')
       return
     }
 
@@ -296,10 +296,16 @@ export default function ManagerDashboard() {
       const url = `${WEBHOOK_URL}?action=dashboard`
       const res = await fetch(url, { method: 'GET', redirect: 'follow' })
 
-      if (!res.ok) throw new Error(`Server returned ${res.status}`)
+      const text = await res.text()
 
-      const json = await res.json()
+      // Detect old / undeployed Apps Script returning the health-check string
+      if (!text.trim().startsWith('{')) {
+        setLoadState('error')
+        setErrorMsg('needs-redeploy')
+        return
+      }
 
+      const json = JSON.parse(text)
       if (json.error) throw new Error(json.error)
 
       setData(json)
@@ -356,15 +362,46 @@ export default function ManagerDashboard() {
 
       {/* ── Error state ────────────────────────────────────────────── */}
       {loadState === 'error' && (
-        <div className="bg-red-50 border border-red-200 rounded-xl p-5 text-center">
-          <p className="text-red-700 font-semibold text-sm mb-1">Unable to load dashboard</p>
-          <p className="text-red-500 text-xs mb-4">{errorMsg}</p>
-          <button
-            onClick={fetchDashboard}
-            className="text-sm font-semibold text-white bg-red-600 hover:bg-red-700 px-4 py-2 rounded-lg transition-colors"
-          >
-            Retry
-          </button>
+        <div className="rounded-xl overflow-hidden border border-red-200">
+          <div className="bg-red-600 px-5 py-3">
+            <p className="text-white font-bold text-sm">
+              {errorMsg === 'needs-redeploy'
+                ? 'Apps Script needs to be redeployed'
+                : errorMsg === 'no-url'
+                ? 'Webhook URL not configured'
+                : 'Unable to load dashboard'}
+            </p>
+          </div>
+          <div className="bg-red-50 px-5 py-4 space-y-3">
+            {errorMsg === 'needs-redeploy' && (
+              <>
+                <p className="text-red-800 text-sm font-medium">
+                  Your Google Apps Script is running old code. Follow these steps:
+                </p>
+                <ol className="text-red-700 text-sm space-y-1.5 list-decimal list-inside">
+                  <li>Open your Google Apps Script project</li>
+                  <li>Replace all code with the updated <code className="bg-red-100 px-1 rounded font-mono text-xs">apps-script.js</code> from this repo</li>
+                  <li>Click <strong>Deploy → Manage Deployments</strong></li>
+                  <li>Edit the existing deployment (pencil icon) and click <strong>Deploy</strong></li>
+                  <li>Come back here and hit Retry</li>
+                </ol>
+              </>
+            )}
+            {errorMsg === 'no-url' && (
+              <p className="text-red-700 text-sm">
+                Set <code className="bg-red-100 px-1 rounded font-mono text-xs">VITE_WEBHOOK_URL</code> in your <code className="bg-red-100 px-1 rounded font-mono text-xs">.env</code> file to your Google Apps Script web app URL.
+              </p>
+            )}
+            {errorMsg !== 'needs-redeploy' && errorMsg !== 'no-url' && (
+              <p className="text-red-600 text-xs">{errorMsg}</p>
+            )}
+            <button
+              onClick={fetchDashboard}
+              className="text-sm font-semibold text-white bg-red-600 hover:bg-red-700 px-4 py-2 rounded-lg transition-colors"
+            >
+              Retry
+            </button>
+          </div>
         </div>
       )}
 
