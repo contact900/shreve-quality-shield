@@ -300,6 +300,46 @@ function buildDashboardData() {
   }
 }
 
+/**
+ * TEST FUNCTION — run this directly from the Apps Script editor (Run menu)
+ * to verify the dashboard endpoint works before redeploying.
+ *
+ * In the GAS editor: select "testDashboard" from the function dropdown → Run
+ * Then click "Execution log" to see the output.
+ */
+function testDashboard() {
+  try {
+    var result = buildDashboardData()
+    Logger.log('✅ Dashboard OK — ' + result.facilities.length + ' facilities')
+    result.facilities.forEach(function(f) {
+      var inv     = f.inventory.map(function(i) { return i.label + ': ' + i.count }).join(', ')
+      var equip   = f.equipment.length + ' equipment'
+      Logger.log('  ' + f.location + ' [' + f.status.toUpperCase() + '] — ' + equip + ' — ' + inv)
+    })
+    Logger.log('Full JSON:\n' + JSON.stringify(result, null, 2))
+  } catch (err) {
+    Logger.log('❌ testDashboard ERROR: ' + err.message)
+    Logger.log(err.stack)
+  }
+}
+
+/**
+ * TEST FUNCTION — simulates the exact GET request the dashboard makes.
+ * In the GAS editor: select "testDoGet" → Run → check Execution log.
+ */
+function testDoGet() {
+  var fakeEvent = { parameter: { action: 'dashboard' } }
+  var response  = doGet(fakeEvent)
+  var text      = response.getContent()
+  Logger.log('Response (first 500 chars):\n' + text.substring(0, 500))
+  try {
+    var parsed = JSON.parse(text)
+    Logger.log('✅ Valid JSON — ' + parsed.facilities.length + ' facilities returned')
+  } catch (e) {
+    Logger.log('❌ Response is not valid JSON: ' + e.message)
+  }
+}
+
 
 // ════════════════════════════════════════════════════════════════════════════════
 //  PHASE 1 — INSPECTION
