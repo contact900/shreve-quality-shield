@@ -43,16 +43,16 @@ export const INVENTORY_ITEMS = [
 ]
 
 const LOCATION_SLACK_CHANNELS = {
-  'Stribling Swepco':         '#stribling-swepco',
-  'Rogers Swepco':            '#rogers-swepco',
-  'Fayetteville Swepco':      '#fayetteville-swepco',
-  'Springdale Swepco':        '#springdale-swepco',
-  'Greenwood Swepco':         '#greenwood-swepco',
-  'Fayetteville BofA':        '#fayetteville-bofa',
-  'Springdale BofA':          '#springdale-bofa',
-  'Rogers BofA':              '#rogers-bofa',
-  'Fort Smith Merrill Lynch':  '#fort-smith-merrill-lynch',
-  'CSL Plasma':               '#csl-plasma',
+  'Stribling Swepco':          '#red-river-sanitors-496',
+  'Rogers Swepco':             '#red-river-sanitors-415',
+  'Fayetteville Swepco':       '#red-river-sanitors-fayetteville-location',
+  'Springdale Swepco':         '#red-river-sanitors-springdale-location',
+  'Greenwood Swepco':          '#red-river-sanitors-greenwood',
+  'Fayetteville BofA':         '#boa-fayetteville',
+  'Springdale BofA':           '#boa-springdale',
+  'Rogers BofA':               '#boa-rogers',
+  'Fort Smith Merrill Lynch':  '#boa-fortsmith',
+  'CSL Plasma':                '#cslplasma-fortsmith',
 }
 
 const initialScores    = SCORE_ITEMS.reduce((acc, i) => ({ ...acc, [i.id]: 0 }),    {})
