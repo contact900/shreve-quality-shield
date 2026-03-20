@@ -6,23 +6,11 @@ import ScoreSummary from './components/ScoreSummary'
 import QRScanner        from './components/QRScanner'
 import Inventory        from './components/Inventory'
 import ManagerDashboard from './components/ManagerDashboard'
+import { LOCATIONS, LOCATION_SLACK_CHANNELS as LOC_CHANNELS } from './utils'
 
 // ── Constants ────────────────────────────────────────────────────────────────
 
 const WEBHOOK_URL = import.meta.env.VITE_WEBHOOK_URL || ''
-
-const LOCATIONS = [
-  'Stribling Swepco',
-  'Rogers Swepco',
-  'Fayetteville Swepco',
-  'Springdale Swepco',
-  'Greenwood Swepco',
-  'Fayetteville BofA',
-  'Springdale BofA',
-  'Rogers BofA',
-  'Fort Smith Merrill Lynch',
-  'CSL Plasma',
-]
 
 const SCORE_ITEMS = [
   { id: 'entry_lobby',  label: 'Entry / Lobby',    subtitle: 'First Impressions'      },
@@ -35,30 +23,10 @@ const SCORE_ITEMS = [
   { id: 'glass',        label: 'Glass',             subtitle: 'Streak-free Windows'    },
 ]
 
-export const INVENTORY_ITEMS = [
-  { id: 'multi_surface', label: 'Multi-Surface Cleaner', unit: 'bottles', min: 5  },
-  { id: 'paper_towels',  label: 'Paper Towels',          unit: 'rolls',   min: 10 },
-  { id: 'liners',        label: 'Liners',                unit: 'boxes',   min: 20 },
-  { id: 'disinfectant',  label: 'Disinfectant',          unit: 'bottles', min: 3  },
-]
-
-const LOCATION_SLACK_CHANNELS = {
-  'Stribling Swepco':         '#stribling-swepco',
-  'Rogers Swepco':            '#rogers-swepco',
-  'Fayetteville Swepco':      '#fayetteville-swepco',
-  'Springdale Swepco':        '#springdale-swepco',
-  'Greenwood Swepco':         '#greenwood-swepco',
-  'Fayetteville BofA':        '#fayetteville-bofa',
-  'Springdale BofA':          '#springdale-bofa',
-  'Rogers BofA':              '#rogers-bofa',
-  'Fort Smith Merrill Lynch':  '#fort-smith-merrill-lynch',
-  'CSL Plasma':               '#csl-plasma',
-}
 
 const initialScores    = SCORE_ITEMS.reduce((acc, i) => ({ ...acc, [i.id]: 0 }),    {})
 const initialPhotos    = SCORE_ITEMS.reduce((acc, i) => ({ ...acc, [i.id]: null }), {})
 const initialItemNotes = SCORE_ITEMS.reduce((acc, i) => ({ ...acc, [i.id]: '' }),   {})
-const initialInventory = INVENTORY_ITEMS.reduce((acc, i) => ({ ...acc, [i.id]: '' }), {})
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -275,7 +243,7 @@ function InspectionTab({ onSuccess }) {
     const payload = {
       type: 'inspection', timestamp: new Date().toISOString(), week_of: getMondayOfCurrentWeek(),
       location, inspector,
-      slack_channel: LOCATION_SLACK_CHANNELS[location] || '#general',
+      slack_channel: LOC_CHANNELS[location] || '#general',
       scores, total_score: totalScore, average_score: fullAvg.toFixed(2), grade: grade?.letter || 'N/A',
       upsells,
       upsell_photos: {
