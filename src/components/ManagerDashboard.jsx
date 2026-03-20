@@ -1,15 +1,9 @@
 import { useState, useEffect, useCallback } from 'react'
+import { SUPPLY_ITEMS } from '../utils'
 
 // ── Constants ─────────────────────────────────────────────────────────────────
 
 const WEBHOOK_URL = import.meta.env.VITE_WEBHOOK_URL || ''
-
-const SUPPLY_ITEMS = [
-  { id: 'multi_surface', label: 'Multi-Surface Cleaner', unit: 'bottles', min: 5  },
-  { id: 'paper_towels',  label: 'Paper Towels',          unit: 'rolls',   min: 10 },
-  { id: 'liners',        label: 'Liners',                unit: 'boxes',   min: 20 },
-  { id: 'disinfectant',  label: 'Disinfectant',          unit: 'bottles', min: 3  },
-]
 
 const STATUS = {
   red:     { label: 'Needs Attention', dot: 'bg-red-500',    ring: 'ring-red-200',    badge: 'bg-red-50 text-red-700 border-red-200'       },
@@ -44,42 +38,42 @@ function StatusBadge({ status }) {
 
 // ── Inventory Snapshot ────────────────────────────────────────────────────────
 
-function InventorySnapshot({ items, date }) {
-  const hasData = items && items.some(i => i.count !== null)
+function InventorySnapshot({ supplies, date }) {
+  // `supplies` is a map of id -> { checked, note } from the new format
+  const hasData = supplies && Object.keys(supplies).length > 0
+
   return (
     <div>
       <div className="flex items-center justify-between mb-3">
-        <h4 className="text-gray-800 font-semibold text-sm">Supply Inventory</h4>
+        <h4 className="text-gray-800 font-semibold text-sm">Supply Check</h4>
         {date && <span className="text-gray-400 text-xs">Last logged {date}</span>}
       </div>
 
       {!hasData ? (
-        <p className="text-gray-400 text-sm italic py-2">No inventory data recorded yet.</p>
+        <p className="text-gray-400 text-sm italic py-2">No supply data recorded yet.</p>
       ) : (
         <div className="divide-y divide-gray-100 rounded-lg border border-gray-200 overflow-hidden">
-          {(items || SUPPLY_ITEMS.map(i => ({ ...i, count: null }))).map((item) => {
-            const isAlert = item.count !== null && item.count < item.min
-            const isLow   = item.count !== null && item.count >= item.min && item.count < item.min * 1.5
+          {SUPPLY_ITEMS.map((item) => {
+            const entry   = supplies[item.id]
+            const checked = entry ? entry.checked : true
+            const note    = entry ? entry.note    : ''
             return (
-              <div key={item.id} className={`flex items-center justify-between px-4 py-3 ${isAlert ? 'bg-red-50' : ''}`}>
-                <div className="flex items-center gap-2 min-w-0">
-                  {isAlert && <span className="w-1.5 h-1.5 rounded-full bg-red-500 flex-shrink-0" />}
-                  {!isAlert && <span className={`w-1.5 h-1.5 rounded-full flex-shrink-0 ${isLow ? 'bg-yellow-400' : 'bg-green-500'}`} />}
-                  <span className={`text-sm font-medium truncate ${isAlert ? 'text-red-700 font-bold' : 'text-gray-800'}`}>
-                    {item.label}
-                  </span>
-                </div>
-                <div className="flex items-center gap-3 flex-shrink-0 ml-3">
-                  {isAlert && (
-                    <span className="text-xs font-bold text-red-600 bg-red-100 border border-red-200 px-2 py-0.5 rounded-full">
-                      LOW
+              <div key={item.id} className={`px-4 py-3 ${!checked ? 'bg-red-50' : ''}`}>
+                <div className="flex items-center justify-between gap-3">
+                  <div className="flex items-center gap-2 min-w-0">
+                    <span className={`w-1.5 h-1.5 rounded-full flex-shrink-0 ${!checked ? 'bg-red-500' : 'bg-green-500'}`} />
+                    <span className={`text-sm font-medium truncate ${!checked ? 'text-red-700 font-bold' : 'text-gray-800'}`}>
+                      {item.label}
                     </span>
-                  )}
-                  <span className={`text-sm font-bold tabular-nums ${isAlert ? 'text-red-700' : isLow ? 'text-yellow-700' : 'text-gray-700'}`}>
-                    {item.count !== null ? item.count : '—'}
-                    <span className="text-gray-400 font-normal text-xs"> / {item.min} {item.unit}</span>
-                  </span>
+                  </div>
+                  {!checked
+                    ? <span className="text-xs font-bold text-red-600 bg-red-100 border border-red-200 px-2 py-0.5 rounded-full flex-shrink-0">NEEDED</span>
+                    : <span className="text-xs font-semibold text-green-600 bg-green-50 border border-green-200 px-2 py-0.5 rounded-full flex-shrink-0">OK</span>
+                  }
                 </div>
+                {!checked && note && (
+                  <p className="text-red-500 text-xs mt-1.5 ml-3.5 italic">{note}</p>
+                )}
               </div>
             )
           })}
@@ -153,7 +147,7 @@ function EquipmentLog({ equipment }) {
 // ── Facility Detail Panel ─────────────────────────────────────────────────────
 
 function FacilityDetail({ facility, onClose }) {
-  const { location, status, lastInspection, inventory, equipment, inventoryDate } = facility
+  const { location, status, lastInspection, supplies, inventory, equipment, inventoryDate } = facility
 
   return (
     <div className="border border-gray-200 rounded-xl bg-white shadow-sm overflow-hidden">
@@ -184,7 +178,7 @@ function FacilityDetail({ facility, onClose }) {
       {/* Panel body */}
       <div className="p-5 space-y-6">
         <InventorySnapshot
-          items={inventory}
+          supplies={supplies || inventory}
           date={inventoryDate}
         />
         <div className="border-t border-gray-100 pt-5">
@@ -198,8 +192,9 @@ function FacilityDetail({ facility, onClose }) {
 // ── Facility Row ──────────────────────────────────────────────────────────────
 
 function FacilityRow({ facility, isSelected, onClick }) {
-  const { location, status, lastInspection, inventory, equipment } = facility
-  const alertCount = (inventory || []).filter(i => i.count !== null && i.count < i.min).length
+  const { location, status, lastInspection, supplies, inventory, equipment } = facility
+  const supplyData  = supplies || {}
+  const alertCount  = Object.values(supplyData).filter(v => v && v.checked === false).length
   const repairCount = (equipment || []).filter(e => !e.workingProperly).length
 
   return (
