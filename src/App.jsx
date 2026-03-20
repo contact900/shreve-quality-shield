@@ -1,7 +1,6 @@
 import { useState, useCallback } from 'react'
 import Header       from './components/Header'
 import ScoreItem    from './components/ScoreItem'
-import GpsCapture   from './components/GpsCapture'
 import Toggle       from './components/Toggle'
 import ScoreSummary from './components/ScoreSummary'
 import QRScanner        from './components/QRScanner'
@@ -32,7 +31,7 @@ const SCORE_ITEMS = [
   { id: 'high_touch',   label: 'High-Touch Points', subtitle: 'Light Switches / Knobs' },
   { id: 'floor_care',   label: 'Floor Care',        subtitle: 'Debris-free / Shine'    },
   { id: 'dusting',      label: 'Dusting',           subtitle: 'Horizontal & Vertical'  },
-  { id: 'trash_liners', label: 'Trash / Liners',    subtitle: 'Emptied & Relined'      },
+  { id: 'trash_liners', label: 'Consumables Filled?', subtitle: 'Emptied & Relined'      },
   { id: 'glass',        label: 'Glass',             subtitle: 'Streak-free Windows'    },
 ]
 
@@ -43,9 +42,23 @@ export const INVENTORY_ITEMS = [
   { id: 'disinfectant',  label: 'Disinfectant',          unit: 'bottles', min: 3  },
 ]
 
-const initialScores    = SCORE_ITEMS.reduce((acc, i)    => ({ ...acc, [i.id]: 0 }),    {})
-const initialPhotos    = SCORE_ITEMS.reduce((acc, i)    => ({ ...acc, [i.id]: null }), {})
-const initialInventory = INVENTORY_ITEMS.reduce((acc, i) => ({ ...acc, [i.id]: '' }),  {})
+const LOCATION_SLACK_CHANNELS = {
+  'Stribling Swepco':         '#stribling-swepco',
+  'Rogers Swepco':            '#rogers-swepco',
+  'Fayetteville Swepco':      '#fayetteville-swepco',
+  'Springdale Swepco':        '#springdale-swepco',
+  'Greenwood Swepco':         '#greenwood-swepco',
+  'Fayetteville BofA':        '#fayetteville-bofa',
+  'Springdale BofA':          '#springdale-bofa',
+  'Rogers BofA':              '#rogers-bofa',
+  'Fort Smith Merrill Lynch':  '#fort-smith-merrill-lynch',
+  'CSL Plasma':               '#csl-plasma',
+}
+
+const initialScores    = SCORE_ITEMS.reduce((acc, i) => ({ ...acc, [i.id]: 0 }),    {})
+const initialPhotos    = SCORE_ITEMS.reduce((acc, i) => ({ ...acc, [i.id]: null }), {})
+const initialItemNotes = SCORE_ITEMS.reduce((acc, i) => ({ ...acc, [i.id]: '' }),   {})
+const initialInventory = INVENTORY_ITEMS.reduce((acc, i) => ({ ...acc, [i.id]: '' }), {})
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -207,31 +220,29 @@ function SuccessScreen({ grade, totalScore, location, alerts, onReset }) {
 // ── Inspection tab ────────────────────────────────────────────────────────────
 
 function InspectionTab({ onSuccess }) {
-  const [location,   setLocation]   = useState('')
-  const [inspector,  setInspector]  = useState('Stacey')
-  const [gps,        setGps]        = useState({ lat: null, lng: null, status: 'idle', error: '', accuracy: null })
-  const [scores,     setScores]     = useState(initialScores)
-  const [photos,     setPhotos]     = useState(initialPhotos)
-  const [inventory,  setInventory]  = useState(initialInventory)
-  const [upsells,    setUpsells]    = useState({ floor_scrub_wax: false, window_detail: false })
-  const [notes,      setNotes]      = useState('')
-  const [submission, setSubmission] = useState({ status: 'idle', message: '' })
+  const [location,     setLocation]     = useState('')
+  const [inspector,    setInspector]    = useState('Stacey')
+  const [scores,       setScores]       = useState(initialScores)
+  const [photos,       setPhotos]       = useState(initialPhotos)
+  const [itemNotes,    setItemNotes]    = useState(initialItemNotes)
+  const [upsells,      setUpsells]      = useState({ floor_scrub_wax: false, window_detail: false })
+  const [upsellPhotos, setUpsellPhotos] = useState({ floor_scrub_wax: null, window_detail: null })
+  const [notes,        setNotes]        = useState('')
+  const [submission,   setSubmission]   = useState({ status: 'idle', message: '' })
 
-  const scoredCount     = Object.values(scores).filter((s) => s > 0).length
-  const photoCoveredIds = Object.entries(photos).filter(([, v]) => v !== null).map(([k]) => k)
-  const missingPhotos   = SCORE_ITEMS.filter((i) => !photos[i.id])
-  const allPhotosDone   = missingPhotos.length === 0
-  const totalScore      = Object.values(scores).reduce((a, b) => a + b, 0)
-  const fullAvg         = totalScore / 8
-  const grade           = scoredCount === 8 ? getGrade(fullAvg) : null
-  const canSubmit       = scoredCount === 8 && allPhotosDone && !!location
+  const scoredCount      = Object.values(scores).filter((s) => s > 0).length
+  const photoCoveredIds  = Object.entries(photos).filter(([, v]) => v !== null).map(([k]) => k)
+  const missingPhotos    = SCORE_ITEMS.filter((i) => !photos[i.id])
+  const allPhotosDone    = missingPhotos.length === 0
+  const totalScore       = Object.values(scores).reduce((a, b) => a + b, 0)
+  const fullAvg          = totalScore / 8
+  const grade            = scoredCount === 8 ? getGrade(fullAvg) : null
+  const upsellPhotosValid = (!upsells.floor_scrub_wax || !!upsellPhotos.floor_scrub_wax) &&
+                            (!upsells.window_detail   || !!upsellPhotos.window_detail)
+  const canSubmit        = scoredCount === 8 && allPhotosDone && !!location && upsellPhotosValid
 
-  const inventoryAlerts = INVENTORY_ITEMS.filter((item) => {
-    const n = parseInt(inventory[item.id], 10)
-    return !isNaN(n) && n < item.min
-  }).map((item) => ({ ...item, count: parseInt(inventory[item.id], 10) }))
-
-  const handleScore = useCallback((id, value) => setScores((p) => ({ ...p, [id]: value })), [])
+  const handleScore    = useCallback((id, value) => setScores((p)    => ({ ...p, [id]: value })), [])
+  const handleItemNote = useCallback((id, text)  => setItemNotes((p) => ({ ...p, [id]: text })),  [])
 
   const handlePhoto = useCallback(async (itemId, file) => {
     if (!file) { setPhotos((p) => ({ ...p, [itemId]: null })); return }
@@ -239,44 +250,44 @@ function InspectionTab({ onSuccess }) {
     setPhotos((p) => ({ ...p, [itemId]: { base64, preview: base64 } }))
   }, [])
 
-  const captureGps = useCallback(() => {
-    if (!navigator.geolocation) { setGps((p) => ({ ...p, status: 'error', error: 'Geolocation not supported.' })); return }
-    setGps({ lat: null, lng: null, status: 'loading', error: '', accuracy: null })
-    navigator.geolocation.getCurrentPosition(
-      (pos) => setGps({ lat: pos.coords.latitude.toFixed(6), lng: pos.coords.longitude.toFixed(6), status: 'captured', error: '', accuracy: Math.round(pos.coords.accuracy) }),
-      (err) => setGps({ lat: null, lng: null, status: 'error', error: err.message, accuracy: null }),
-      { enableHighAccuracy: true, timeout: 12000, maximumAge: 0 },
-    )
+  const handleUpsellPhoto = useCallback(async (key, file) => {
+    if (!file) { setUpsellPhotos((p) => ({ ...p, [key]: null })); return }
+    const base64 = await resizeImage(file)
+    setUpsellPhotos((p) => ({ ...p, [key]: { base64, preview: base64 } }))
   }, [])
 
   const handleSubmit = async (e) => {
     e.preventDefault()
-    if (!location)        { setSubmission({ status: 'error', message: 'Please select a location.' }); return }
-    if (scoredCount < 8)  { setSubmission({ status: 'error', message: `Rate all 8 areas. ${8 - scoredCount} still need a score.` }); return }
-    if (!allPhotosDone)   { setSubmission({ status: 'error', message: `Missing photos for: ${missingPhotos.map((i) => i.label).join(', ')}.` }); return }
-    if (!WEBHOOK_URL)     { setSubmission({ status: 'error', message: 'Webhook URL not configured. Set VITE_WEBHOOK_URL in .env.' }); return }
+    if (!location)         { setSubmission({ status: 'error', message: 'Please select a location.' }); return }
+    if (scoredCount < 8)   { setSubmission({ status: 'error', message: `Rate all 8 areas. ${8 - scoredCount} still need a score.` }); return }
+    if (!allPhotosDone)    { setSubmission({ status: 'error', message: `Missing photos for: ${missingPhotos.map((i) => i.label).join(', ')}.` }); return }
+    if (!upsellPhotosValid){ setSubmission({ status: 'error', message: 'A photo is required for each selected specialty add-on.' }); return }
+    if (!WEBHOOK_URL)      { setSubmission({ status: 'error', message: 'Webhook URL not configured. Set VITE_WEBHOOK_URL in .env.' }); return }
 
     setSubmission({ status: 'loading', message: '' })
 
     const item_photos = SCORE_ITEMS.map((item) => ({
-      item_id: item.id, item_label: item.label, base64: photos[item.id]?.base64 || null,
+      item_id: item.id, item_label: item.label,
+      base64: photos[item.id]?.base64 || null,
+      note: itemNotes[item.id] || '',
     })).filter((p) => p.base64)
 
     const payload = {
       type: 'inspection', timestamp: new Date().toISOString(), week_of: getMondayOfCurrentWeek(),
       location, inspector,
-      gps_lat: gps.lat || 'Not captured', gps_lng: gps.lng || 'Not captured',
-      gps_accuracy: gps.accuracy ? `±${gps.accuracy}m` : 'N/A',
+      slack_channel: LOCATION_SLACK_CHANNELS[location] || '#general',
       scores, total_score: totalScore, average_score: fullAvg.toFixed(2), grade: grade?.letter || 'N/A',
       upsells,
-      inventory: INVENTORY_ITEMS.reduce((acc, item) => { acc[item.id] = parseInt(inventory[item.id], 10) || 0; return acc }, {}),
-      inventory_alerts: inventoryAlerts.map((a) => ({ id: a.id, label: a.label, count: a.count, min: a.min })),
+      upsell_photos: {
+        floor_scrub_wax: upsellPhotos.floor_scrub_wax?.base64 || null,
+        window_detail:   upsellPhotos.window_detail?.base64   || null,
+      },
       notes, item_photos,
     }
 
     try {
       await fetch(WEBHOOK_URL, { method: 'POST', mode: 'no-cors', headers: { 'Content-Type': 'text/plain' }, body: JSON.stringify(payload) })
-      setTimeout(() => { setSubmission({ status: 'success', message: '' }); onSuccess({ grade, totalScore, location, alerts: inventoryAlerts }) }, 1200)
+      setTimeout(() => { setSubmission({ status: 'success', message: '' }); onSuccess({ grade, totalScore, location, alerts: [] }) }, 1200)
     } catch {
       setSubmission({ status: 'error', message: 'Network error. Check your connection.' })
     }
@@ -310,8 +321,6 @@ function InspectionTab({ onSuccess }) {
           <input type="text" value={inspector} onChange={(e) => setInspector(e.target.value)}
             placeholder="Inspector name" className={INPUT} />
         </div>
-
-        <GpsCapture gps={gps} onCapture={captureGps} />
       </section>
 
       {/* ── 8-Point Scorecard ──────────────────────────────────────────── */}
@@ -336,57 +345,89 @@ function InspectionTab({ onSuccess }) {
         <div className="space-y-3">
           {SCORE_ITEMS.map((item, idx) => (
             <ScoreItem key={item.id} number={idx + 1} item={item}
-              value={scores[item.id]} photo={photos[item.id]}
+              value={scores[item.id]} photo={photos[item.id]} note={itemNotes[item.id]}
               onChange={(v) => handleScore(item.id, v)}
-              onPhoto={(file) => handlePhoto(item.id, file)} />
+              onPhoto={(file) => handlePhoto(item.id, file)}
+              onNote={(text) => handleItemNote(item.id, text)} />
           ))}
         </div>
 
         {scoredCount > 0 && <ScoreSummary totalScore={totalScore} scoredCount={scoredCount} grade={grade} maxScore={40} />}
       </section>
 
-      {/* ── Supply Inventory ───────────────────────────────────────────── */}
-      <section className="bg-white border border-gray-200 rounded-xl overflow-hidden shadow-sm">
-        <div className="px-5 pt-4 pb-3 border-b border-gray-100">
-          <h2 className="text-gray-900 font-semibold text-base">Supply Inventory</h2>
-          <p className="text-gray-400 text-xs mt-0.5">Items below minimum will trigger a reorder alert.</p>
-        </div>
-        <div className="divide-y divide-gray-100">
-          {INVENTORY_ITEMS.map((item) => {
-            const count   = parseInt(inventory[item.id], 10)
-            const isAlert = !isNaN(count) && count < item.min
-            return (
-              <div key={item.id} className={`px-5 py-3.5 ${isAlert ? 'bg-red-50' : ''}`}>
-                <div className="flex items-center gap-3">
-                  <div className="flex-1 min-w-0">
-                    <p className="text-gray-900 font-medium text-sm">{item.label}</p>
-                    <p className="text-gray-400 text-xs">Min: {item.min} {item.unit}</p>
-                  </div>
-                  {isAlert && (
-                    <span className="text-xs font-bold text-red-600 bg-red-100 border border-red-200 px-2 py-0.5 rounded-full">
-                      🚨 LOW
-                    </span>
-                  )}
-                  <input type="number" min="0" value={inventory[item.id]}
-                    onChange={(e) => { const v = e.target.value; if (v === '' || /^\d+$/.test(v)) setInventory((p) => ({ ...p, [item.id]: v })) }}
-                    placeholder="0"
-                    className={`w-20 text-center bg-white border rounded-lg px-2 py-2 text-gray-900 font-semibold text-sm outline-none transition-colors ${
-                      isAlert ? 'border-red-400 focus:ring-2 focus:ring-red-200' : 'border-gray-300 focus:border-brand focus:ring-2 focus:ring-brand/20'}`} />
-                </div>
-              </div>
-            )
-          })}
-        </div>
-      </section>
-
       {/* ── Specialty Add-ons ──────────────────────────────────────────── */}
       <section className="bg-white border border-gray-200 rounded-xl p-5 shadow-sm">
         <SectionTitle>Specialty Add-ons</SectionTitle>
+
         <Toggle label="Floor Scrub / Wax Needed?" description="Add-on deep floor service" icon="🧹"
-          checked={upsells.floor_scrub_wax} onChange={(v) => setUpsells((p) => ({ ...p, floor_scrub_wax: v }))} />
-        <div className="border-t border-gray-100 my-1" />
+          checked={upsells.floor_scrub_wax} onChange={(v) => { setUpsells((p) => ({ ...p, floor_scrub_wax: v })); if (!v) setUpsellPhotos((p) => ({ ...p, floor_scrub_wax: null })) }} />
+        {upsells.floor_scrub_wax && (
+          <div className="mt-2 ml-1 pl-3 border-l-2 border-amber-200">
+            <input id="upsell-photo-floor" type="file" accept="image/*" capture="environment"
+              onChange={(e) => handleUpsellPhoto('floor_scrub_wax', e.target.files?.[0] || null)}
+              className="hidden" />
+            {!upsellPhotos.floor_scrub_wax ? (
+              <label htmlFor="upsell-photo-floor"
+                className="flex items-center gap-2 text-amber-600 hover:text-amber-700 hover:bg-amber-50 rounded-lg px-2 py-1.5 cursor-pointer transition-colors">
+                <span className="text-base leading-none select-none">📷</span>
+                <span className="text-xs font-medium">Add required photo for floor service</span>
+              </label>
+            ) : (
+              <div className="flex items-center gap-2.5">
+                <img src={upsellPhotos.floor_scrub_wax.preview} alt="Floor service evidence"
+                  className="w-11 h-11 object-cover rounded-lg border border-green-300 flex-shrink-0" />
+                <div className="flex-1 min-w-0">
+                  <p className="text-green-600 text-xs font-semibold leading-tight">Photo captured</p>
+                  <p className="text-gray-400 text-xs">Floor Scrub / Wax</p>
+                </div>
+                <label htmlFor="upsell-photo-floor"
+                  className="flex-shrink-0 text-gray-400 hover:text-gray-600 text-xs px-2 py-1.5 rounded-lg cursor-pointer hover:bg-gray-100 transition-colors select-none">
+                  ↺ Retake
+                </label>
+                <button type="button" onClick={() => setUpsellPhotos((p) => ({ ...p, floor_scrub_wax: null }))}
+                  className="flex-shrink-0 text-red-400 hover:text-red-600 text-xs px-2 py-1.5 rounded-lg hover:bg-red-50 transition-colors">
+                  ✕
+                </button>
+              </div>
+            )}
+          </div>
+        )}
+
+        <div className="border-t border-gray-100 my-2" />
+
         <Toggle label="Window Detail Needed?" description="Full interior/exterior window service" icon="🪟"
-          checked={upsells.window_detail} onChange={(v) => setUpsells((p) => ({ ...p, window_detail: v }))} />
+          checked={upsells.window_detail} onChange={(v) => { setUpsells((p) => ({ ...p, window_detail: v })); if (!v) setUpsellPhotos((p) => ({ ...p, window_detail: null })) }} />
+        {upsells.window_detail && (
+          <div className="mt-2 ml-1 pl-3 border-l-2 border-amber-200">
+            <input id="upsell-photo-window" type="file" accept="image/*" capture="environment"
+              onChange={(e) => handleUpsellPhoto('window_detail', e.target.files?.[0] || null)}
+              className="hidden" />
+            {!upsellPhotos.window_detail ? (
+              <label htmlFor="upsell-photo-window"
+                className="flex items-center gap-2 text-amber-600 hover:text-amber-700 hover:bg-amber-50 rounded-lg px-2 py-1.5 cursor-pointer transition-colors">
+                <span className="text-base leading-none select-none">📷</span>
+                <span className="text-xs font-medium">Add required photo for window detail</span>
+              </label>
+            ) : (
+              <div className="flex items-center gap-2.5">
+                <img src={upsellPhotos.window_detail.preview} alt="Window detail evidence"
+                  className="w-11 h-11 object-cover rounded-lg border border-green-300 flex-shrink-0" />
+                <div className="flex-1 min-w-0">
+                  <p className="text-green-600 text-xs font-semibold leading-tight">Photo captured</p>
+                  <p className="text-gray-400 text-xs">Window Detail</p>
+                </div>
+                <label htmlFor="upsell-photo-window"
+                  className="flex-shrink-0 text-gray-400 hover:text-gray-600 text-xs px-2 py-1.5 rounded-lg cursor-pointer hover:bg-gray-100 transition-colors select-none">
+                  ↺ Retake
+                </label>
+                <button type="button" onClick={() => setUpsellPhotos((p) => ({ ...p, window_detail: null }))}
+                  className="flex-shrink-0 text-red-400 hover:text-red-600 text-xs px-2 py-1.5 rounded-lg hover:bg-red-50 transition-colors">
+                  ✕
+                </button>
+              </div>
+            )}
+          </div>
+        )}
       </section>
 
       {/* ── Notes ──────────────────────────────────────────────────────── */}

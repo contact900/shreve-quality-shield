@@ -11,7 +11,7 @@ const SCORE_CONFIG = [
 
 const INACTIVE = 'bg-white border-gray-200 text-gray-400 hover:border-gray-400 hover:text-gray-600'
 
-export default function ScoreItem({ number, item, value, photo, onChange, onPhoto }) {
+export default function ScoreItem({ number, item, value, photo, note, onChange, onPhoto, onNote }) {
   const inputRef = useRef(null)
   const hasPhoto = !!photo
 
@@ -129,6 +129,17 @@ export default function ScoreItem({ number, item, value, photo, onChange, onPhot
             </button>
           </div>
         )}
+      </div>
+
+      {/* Per-item notes */}
+      <div className="pt-2 border-t border-gray-100 mt-2">
+        <textarea
+          value={note || ''}
+          onChange={(e) => onNote(e.target.value)}
+          placeholder="Notes for this area (optional)..."
+          rows={2}
+          className="w-full bg-white border border-gray-200 rounded-lg px-3 py-2 text-gray-900 placeholder-gray-400 focus:border-brand focus:ring-1 focus:ring-brand/20 outline-none transition-colors text-xs resize-none"
+        />
       </div>
     </div>
   )
