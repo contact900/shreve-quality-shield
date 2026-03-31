@@ -32,6 +32,24 @@ var OWNER_EMAIL = 'contact@shrevecleaning.com'
 /** Central America/Chicago timezone for NW Arkansas */
 var SCRIPT_TZ = 'America/Chicago'
 
+/**
+ * Slack incoming webhook URLs — one per location.
+ * To set up: In Slack go to Apps → Incoming Webhooks → Add New Webhook to Workspace,
+ * select the channel, then paste the generated URL here.
+ */
+var SLACK_WEBHOOKS = {
+  'Stribling Swepco':         'YOUR_WEBHOOK_URL_red-river-sanitors-496',
+  'Rogers Swepco':            'YOUR_WEBHOOK_URL_red-river-sanitors-415',
+  'Fayetteville Swepco':      'YOUR_WEBHOOK_URL_red-river-sanitors-fayetteville',
+  'Springdale Swepco':        'YOUR_WEBHOOK_URL_red-river-sanitors-springdale',
+  'Greenwood Swepco':         'YOUR_WEBHOOK_URL_red-river-sanitors-greenwood',
+  'Fayetteville BofA':        'YOUR_WEBHOOK_URL_boa-fayetteville',
+  'Springdale BofA':          'YOUR_WEBHOOK_URL_boa-springdale',
+  'Rogers BofA':              'YOUR_WEBHOOK_URL_boa-rogers',
+  'Fort Smith Merrill Lynch': 'YOUR_WEBHOOK_URL_boa-fortsmith',
+  'CSL Plasma':               'YOUR_WEBHOOK_URL_cslplasma-fortsmith',
+}
+
 
 // ── Score category definitions (must match frontend SCORE_ITEMS) ─────────────
 
@@ -47,10 +65,17 @@ var SCORE_ITEMS = [
 ]
 
 var SUPPLY_ITEMS = [
-  { id: 'multi_surface', label: 'Multi-Surface Cleaner', unit: 'bottles', min: 5  },
-  { id: 'paper_towels',  label: 'Paper Towels',          unit: 'rolls',   min: 10 },
-  { id: 'liners',        label: 'Liners',                unit: 'boxes',   min: 20 },
-  { id: 'disinfectant',  label: 'Disinfectant',          unit: 'bottles', min: 3  },
+  { id: 'multi_surface_cleaner', label: 'Multi Surface Cleaner Bottle' },
+  { id: 'blue_microfibers',      label: 'Blue Microfibers'             },
+  { id: 'red_microfibers',       label: 'Red Microfibers'              },
+  { id: 'toilet_cleaner',        label: 'Toilet Cleaner'               },
+  { id: 'vacuums',               label: 'Vacuums'                      },
+  { id: 'clean_mop_heads',       label: 'Clean Mop Heads'              },
+  { id: 'mop_buckets_handles',   label: 'Mop Buckets and Handles'      },
+  { id: 'paper_towels',          label: 'Paper Towels'                 },
+  { id: 'toilet_paper',          label: 'Toilet Paper'                 },
+  { id: 'soap',                  label: 'Soap'                         },
+  { id: 'trash_liners',          label: 'Trash Liner'                  },
 ]
 
 
@@ -74,6 +99,24 @@ var LOCATIONS_LIST = [
 ]
 
 
+// ── Slack helper ──────────────────────────────────────────────────────────────
+
+function postToSlack(location, text) {
+  var webhookUrl = SLACK_WEBHOOKS[location]
+  if (!webhookUrl || webhookUrl.indexOf('YOUR_WEBHOOK_URL') === 0) return
+  try {
+    UrlFetchApp.fetch(webhookUrl, {
+      method: 'post',
+      contentType: 'application/json',
+      payload: JSON.stringify({ text: text }),
+      muteHttpExceptions: true,
+    })
+  } catch (e) {
+    Logger.log('Slack post error: ' + e.message)
+  }
+}
+
+
 // ── Entry point ───────────────────────────────────────────────────────────────
 
 function doPost(e) {
@@ -85,14 +128,38 @@ function doPost(e) {
       var driveResult = uploadPhotosToDrive(data)
       logInspectionToSheet(data, driveResult)
       sendInspectionEmail(data, driveResult)
+      var inspGrade = data.grade || 'N/A'
+      var inspScore = data.total_score || 0
+      postToSlack(data.location,
+        '🛡️ *Inspection logged — ' + data.location + '*\n'
+        + 'Inspector: ' + (data.inspector || 'Unknown') + '\n'
+        + 'Grade: *' + inspGrade + '* (' + inspScore + '/40)'
+      )
 
     } else if (type === 'asset') {
       logAssetToSheet(data)
       sendAssetEmail(data)
+      var assetStatus = data.working_properly ? '✅ Working normally' : '❌ NOT working properly'
+      postToSlack(data.location,
+        '🔍 *Equipment scan — ' + data.location + '*\n'
+        + 'Equipment ID: *' + data.equipment_id + '*\n'
+        + 'Condition: ' + data.condition + ' · ' + assetStatus
+      )
 
     } else if (type === 'inventory') {
       logInventoryToSheet(data)
       sendInventoryEmail(data)
+      var invSupplies  = data.supplies || {}
+      var flaggedLabels = SUPPLY_ITEMS.filter(function(item) {
+        return invSupplies[item.id] && invSupplies[item.id].checked === false
+      }).map(function(item) {
+        var note = invSupplies[item.id].note
+        return note ? item.label + ' (' + note + ')' : item.label
+      })
+      var invMsg = flaggedLabels.length > 0
+        ? '🚨 *Supply check — ' + data.location + '* — ' + flaggedLabels.length + ' item(s) needed:\n• ' + flaggedLabels.join('\n• ')
+        : '✅ *Supply check — ' + data.location + '* — All items stocked.'
+      postToSlack(data.location, invMsg)
     }
 
     return ContentService
@@ -161,22 +228,31 @@ function buildDashboardData() {
   var ss = SpreadsheetApp.getActiveSpreadsheet()
 
   // ── 1. Latest inventory record per location ──────────────────────────────
+  // Inventory sheet columns (0-indexed):
+  //   0=Timestamp, 1=Date, 2=Time, 3=Location,
+  //   4..14 = one column per SUPPLY_ITEMS entry (Yes/No),
+  //   15=Flagged Items, 16=Notes, 17=Email Sent
   var invByLocation = {}
   var invSheet = ss.getSheetByName(SHEET_INVENTORY)
   if (invSheet && invSheet.getLastRow() > 1) {
-    var invRows = invSheet.getRange(2, 1, invSheet.getLastRow() - 1, 11).getValues()
+    var invRows = invSheet.getRange(2, 1, invSheet.getLastRow() - 1, 18).getValues()
     for (var i = 0; i < invRows.length; i++) {
-      var r = invRows[i]
+      var r   = invRows[i]
       var loc = r[3]
       var ts  = r[0]
       if (!invByLocation[loc] || ts > invByLocation[loc].ts) {
+        var suppliesMap = {}
+        for (var si = 0; si < SUPPLY_ITEMS.length; si++) {
+          var cellVal = String(r[4 + si] || '')
+          suppliesMap[SUPPLY_ITEMS[si].id] = {
+            checked: cellVal === 'Yes',
+            note:    '',
+          }
+        }
         invByLocation[loc] = {
-          ts:            ts,
-          date:          r[1] instanceof Date ? Utilities.formatDate(r[1], SCRIPT_TZ, 'MM/dd/yyyy') : String(r[1]),
-          multi_surface: Number(r[4]) || 0,
-          paper_towels:  Number(r[5]) || 0,
-          liners:        Number(r[6]) || 0,
-          disinfectant:  Number(r[7]) || 0,
+          ts:       ts,
+          date:     r[1] instanceof Date ? Utilities.formatDate(r[1], SCRIPT_TZ, 'MM/dd/yyyy') : String(r[1]),
+          supplies: suppliesMap,
         }
       }
     }
@@ -242,18 +318,8 @@ function buildDashboardData() {
     var assets = assetsByLocation[location] || []
     var insp   = inspByLocation[location]
 
-    // Supply snapshot
-    var supplyItems = SUPPLY_ITEMS.map(function(item) {
-      var count = inv ? (inv[item.id] !== undefined ? inv[item.id] : null) : null
-      return {
-        id:      item.id,
-        label:   item.label,
-        unit:    item.unit,
-        min:     item.min,
-        count:   count,
-        isAlert: count !== null && count < item.min,
-      }
-    })
+    // Supply snapshot — build as a map { id: { checked, note } } for the dashboard
+    var suppliesSnapshot = inv ? inv.supplies : null
 
     // Equipment list (strip internal ts field)
     var equipmentList = assets.map(function(a) {
@@ -268,14 +334,16 @@ function buildDashboardData() {
     })
 
     // Status logic
-    var hasReorderAlert = supplyItems.some(function(s) { return s.isAlert })
-    var hasEquipIssue   = assets.some(function(a) { return !a.workingProperly })
+    var hasSupplyAlert = suppliesSnapshot
+      ? Object.keys(suppliesSnapshot).some(function(k) { return suppliesSnapshot[k].checked === false })
+      : false
+    var hasEquipIssue    = assets.some(function(a) { return !a.workingProperly })
     var hasPoorCondition = assets.some(function(a) { return a.condition === 'Poor' })
     var hasFairCondition = assets.some(function(a) { return a.condition === 'Fair' })
 
     var status = 'unknown'
     if (inv !== undefined || assets.length > 0) {
-      if (hasReorderAlert || hasEquipIssue) {
+      if (hasSupplyAlert || hasEquipIssue) {
         status = 'red'
       } else if (hasPoorCondition || hasFairCondition) {
         status = 'yellow'
@@ -289,7 +357,7 @@ function buildDashboardData() {
       status:         status,
       lastInspection: insp ? { date: insp.date, grade: insp.grade, totalScore: insp.totalScore } : null,
       inventoryDate:  inv ? inv.date : null,
-      inventory:      supplyItems,
+      supplies:       suppliesSnapshot,
       equipment:      equipmentList,
     }
   })
@@ -613,8 +681,10 @@ function sendAssetEmail(data) {
 
 var INVENTORY_HEADERS = [
   'Timestamp', 'Date', 'Time', 'Location',
-  'Multi-Surface', 'Paper Towels', 'Liners', 'Disinfectant',
-  'Alert Items', 'Notes', 'Email Sent',
+  'Multi Surface Cleaner', 'Blue Microfibers', 'Red Microfibers', 'Toilet Cleaner',
+  'Vacuums', 'Clean Mop Heads', 'Mop Buckets & Handles',
+  'Paper Towels', 'Toilet Paper', 'Soap', 'Trash Liners',
+  'Flagged Items', 'Notes', 'Email Sent',
 ]
 
 function logInventoryToSheet(data) {
@@ -625,51 +695,67 @@ function logInventoryToSheet(data) {
     initSheetHeaders(sheet, INVENTORY_HEADERS, '#7c2d12')
   }
 
-  var ts      = new Date(data.timestamp)
-  var inv     = data.inventory || {}
-  var alertStr = (data.inventory_alerts || []).map(function(a) {
-    return a.label + ': ' + a.count + ' (min ' + a.min + ')'
-  }).join(' | ')
+  var ts       = new Date(data.timestamp)
+  var supplies = data.supplies || {}
 
-  sheet.appendRow([
+  // Build one Yes/No value per supply item
+  var supplyValues = SUPPLY_ITEMS.map(function(item) {
+    var entry = supplies[item.id]
+    if (!entry) return 'No Data'
+    return entry.checked ? 'Yes' : 'No'
+  })
+
+  // List flagged items (unchecked) with their notes
+  var flagged = SUPPLY_ITEMS.filter(function(item) {
+    return supplies[item.id] && supplies[item.id].checked === false
+  }).map(function(item) {
+    var note = supplies[item.id].note
+    return note ? item.label + ' (' + note + ')' : item.label
+  })
+  var flaggedStr = flagged.join(' | ')
+
+  var row = [
     data.timestamp,
     Utilities.formatDate(ts, SCRIPT_TZ, 'MM/dd/yyyy'),
     Utilities.formatDate(ts, SCRIPT_TZ, 'hh:mm a'),
     data.location,
-    inv.multi_surface  || 0,
-    inv.paper_towels   || 0,
-    inv.liners         || 0,
-    inv.disinfectant   || 0,
-    alertStr,
+  ].concat(supplyValues).concat([
+    flaggedStr,
     data.notes || '',
     'Sent to ' + OWNER_EMAIL,
   ])
+
+  sheet.appendRow(row)
 }
 
 function sendInventoryEmail(data) {
-  var alerts    = data.inventory_alerts || []
-  var hasAlerts = alerts.length > 0
-  var inv       = data.inventory || {}
+  var supplies  = data.supplies || {}
+  var flagged   = SUPPLY_ITEMS.filter(function(item) {
+    return supplies[item.id] && supplies[item.id].checked === false
+  })
+  var hasAlerts = flagged.length > 0
 
   // ── RED ALERT top block ───────────────────────────────────────────────────
   var alertBlock = ''
   if (hasAlerts) {
-    var alertRows = alerts.map(function(a) {
+    var alertRows = flagged.map(function(item) {
+      var note = supplies[item.id].note || ''
       return '<tr>'
-        + '<td style="padding:8px 16px;border-bottom:1px solid #7f1d1d;color:#fecaca;font-weight:bold;">' + a.label + '</td>'
-        + '<td style="padding:8px 16px;border-bottom:1px solid #7f1d1d;color:#fca5a5;text-align:center;">' + a.count + ' ' + a.unit + '</td>'
-        + '<td style="padding:8px 16px;border-bottom:1px solid #7f1d1d;color:#f87171;text-align:center;">Need ≥ ' + a.min + '</td>'
+        + '<td style="padding:8px 16px;border-bottom:1px solid #7f1d1d;color:#fecaca;font-weight:bold;">' + item.label + '</td>'
+        + '<td style="padding:8px 16px;border-bottom:1px solid #7f1d1d;color:#f87171;text-align:center;font-weight:bold;">Needed</td>'
+        + '<td style="padding:8px 16px;border-bottom:1px solid #7f1d1d;color:#fca5a5;font-size:12px;">' + escapeHtml(note) + '</td>'
         + '</tr>'
     }).join('')
 
     alertBlock = ''
       + '<div style="background:#450a0a;border:2px solid #dc2626;border-radius:10px;padding:20px;margin-bottom:20px;">'
-      +   '<div style="color:#ef4444;font-size:18px;font-weight:900;margin-bottom:12px;">🚨 RED ALERT — REORDER REQUIRED</div>'
+      +   '<div style="color:#ef4444;font-size:18px;font-weight:900;margin-bottom:12px;">🚨 SUPPLY ALERT — ITEMS NEEDED</div>'
+      +   '<p style="color:#fca5a5;font-size:13px;margin:0 0 12px;">The following items were flagged as low or missing.</p>'
       +   '<table style="width:100%;border-collapse:collapse;">'
       +     '<thead><tr style="background:#7f1d1d;">'
       +       '<th style="padding:8px 16px;text-align:left;color:#fca5a5;font-size:12px;">Supply Item</th>'
-      +       '<th style="padding:8px 16px;text-align:center;color:#fca5a5;font-size:12px;">In Stock</th>'
-      +       '<th style="padding:8px 16px;text-align:center;color:#fca5a5;font-size:12px;">Minimum</th>'
+      +       '<th style="padding:8px 16px;text-align:center;color:#fca5a5;font-size:12px;">Status</th>'
+      +       '<th style="padding:8px 16px;text-align:left;color:#fca5a5;font-size:12px;">Note</th>'
       +     '</tr></thead>'
       +     '<tbody>' + alertRows + '</tbody>'
       +   '</table>'
@@ -677,14 +763,16 @@ function sendInventoryEmail(data) {
   }
 
   var supplyRows = SUPPLY_ITEMS.map(function(item) {
-    var count = inv[item.id] || 0
-    var isLow = count < item.min
-    var bg    = isLow ? '#fee2e2' : count < item.min * 1.5 ? '#fef9c3' : '#dcfce7'
-    var fg    = isLow ? '#7f1d1d' : count < item.min * 1.5 ? '#78350f' : '#14532d'
+    var entry   = supplies[item.id]
+    var checked = entry ? entry.checked : true
+    var note    = entry ? (entry.note || '') : ''
+    var bg      = checked ? '#dcfce7' : '#fee2e2'
+    var fg      = checked ? '#14532d' : '#7f1d1d'
+    var status  = checked ? '✅ Stocked' : '🚨 Needed'
     return '<tr>'
       + '<td style="padding:9px 16px;border-bottom:1px solid #f3f4f6;font-size:13px;color:#111827;">' + item.label + '</td>'
-      + '<td style="padding:9px 16px;border-bottom:1px solid #f3f4f6;text-align:center;background:' + bg + ';color:' + fg + ';font-weight:bold;">' + count + ' ' + item.unit + '</td>'
-      + '<td style="padding:9px 16px;border-bottom:1px solid #f3f4f6;text-align:center;color:#6b7280;font-size:12px;">Min: ' + item.min + '</td>'
+      + '<td style="padding:9px 16px;border-bottom:1px solid #f3f4f6;text-align:center;background:' + bg + ';color:' + fg + ';font-weight:bold;font-size:12px;">' + status + '</td>'
+      + '<td style="padding:9px 16px;border-bottom:1px solid #f3f4f6;font-size:12px;color:#6b7280;">' + escapeHtml(note) + '</td>'
       + '</tr>'
   }).join('')
 
@@ -698,15 +786,15 @@ function sendInventoryEmail(data) {
     + '<table style="width:100%;border-collapse:collapse;border:1px solid #e5e7eb;border-top:none;">'
     +   '<thead><tr style="background:#f8fafc;">'
     +     '<th style="padding:10px 16px;text-align:left;font-size:12px;color:#374151;border-bottom:2px solid #e5e7eb;">Supply Item</th>'
-    +     '<th style="padding:10px 16px;text-align:center;font-size:12px;color:#374151;border-bottom:2px solid #e5e7eb;">In-Stock Count</th>'
-    +     '<th style="padding:10px 16px;text-align:center;font-size:12px;color:#374151;border-bottom:2px solid #e5e7eb;">Minimum</th>'
+    +     '<th style="padding:10px 16px;text-align:center;font-size:12px;color:#374151;border-bottom:2px solid #e5e7eb;">Status</th>'
+    +     '<th style="padding:10px 16px;text-align:left;font-size:12px;color:#374151;border-bottom:2px solid #e5e7eb;">Note</th>'
     +   '</tr></thead>'
     +   '<tbody>' + supplyRows + '</tbody>'
     + '</table>'
     + (data.notes ? '<div style="background:#f8fafc;border:1px solid #e5e7eb;border-radius:8px;padding:14px 18px;margin-top:16px;font-size:13px;color:#4b5563;"><strong>Notes:</strong> ' + escapeHtml(data.notes) + '</div>' : '')
 
-  var subject = (hasAlerts ? '🚨 [REORDER ALERT] ' : '[Shreve Inventory] ')
-    + data.location + ' Stock-Take — '
+  var subject = (hasAlerts ? '🚨 [SUPPLY ALERT] ' : '[Shreve Inventory] ')
+    + data.location + ' Supply Check — '
     + Utilities.formatDate(new Date(data.timestamp), SCRIPT_TZ, 'M/d/yyyy')
 
   MailApp.sendEmail({ to: OWNER_EMAIL, subject: subject, htmlBody: emailWrapper(body) })
