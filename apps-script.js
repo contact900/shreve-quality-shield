@@ -29,6 +29,9 @@ var DRIVE_FOLDER_ID = 'YOUR_GOOGLE_DRIVE_FOLDER_ID'
 /** Primary notification email */
 var OWNER_EMAIL = 'contact@shrevecleaning.com'
 
+/** Slack Bot Token (xoxb-…). Get from api.slack.com → Your App → OAuth & Permissions */
+var SLACK_BOT_TOKEN = 'YOUR_SLACK_BOT_TOKEN'
+
 /** Central America/Chicago timezone for NW Arkansas */
 var SCRIPT_TZ = 'America/Chicago'
 
@@ -74,6 +77,95 @@ var LOCATIONS_LIST = [
 ]
 
 
+// ── Slack channel map (mirrors frontend LOCATION_SLACK_CHANNELS) ─────────────
+
+var LOCATION_SLACK_CHANNELS = {
+  'Stribling Swepco':         '#red-river-sanitors-496',
+  'Rogers Swepco':            '#red-river-sanitors-415',
+  'Fayetteville Swepco':      '#red-river-sanitors-fayetteville-location',
+  'Springdale Swepco':        '#red-river-sanitors-springdale-location',
+  'Greenwood Swepco':         '#red-river-sanitors-greenwood',
+  'Fayetteville BofA':        '#boa-fayetteville',
+  'Springdale BofA':          '#boa-springdale',
+  'Rogers BofA':              '#boa-rogers',
+  'Fort Smith Merrill Lynch': '#boa-fortsmith',
+  'CSL Plasma':               '#cslplasma-fortsmith',
+}
+
+/**
+ * Post a plain-text message to a Slack channel via the Bot Token.
+ * Silently skips if the token is not configured.
+ */
+function sendSlackMessage(channel, text) {
+  if (!SLACK_BOT_TOKEN || SLACK_BOT_TOKEN === 'YOUR_SLACK_BOT_TOKEN') return
+  try {
+    UrlFetchApp.fetch('https://slack.com/api/chat.postMessage', {
+      method: 'post',
+      contentType: 'application/json',
+      headers: { 'Authorization': 'Bearer ' + SLACK_BOT_TOKEN },
+      payload: JSON.stringify({ channel: channel, text: text }),
+      muteHttpExceptions: true,
+    })
+  } catch (err) {
+    Logger.log('Slack error: ' + err.message)
+  }
+}
+
+/** Returns the Slack channel for a payload, falling back to the location map then #general. */
+function getSlackChannel(data) {
+  return data.slack_channel
+    || LOCATION_SLACK_CHANNELS[data.location]
+    || '#general'
+}
+
+function sendInspectionSlack(data, driveResult) {
+  var grade  = data.grade || 'N/A'
+  var score  = data.total_score || 0
+  var alerts = data.inventory_alerts || []
+  var lines  = [
+    '🛡️ *Inspection Report — ' + data.location + '*',
+    'Grade: *' + grade + '* (' + score + '/40)  |  Inspector: ' + (data.inspector || '—'),
+  ]
+  if (alerts.length > 0) {
+    lines.push('🚨 *Supply Alerts:* ' + alerts.map(function(a) { return a.label + ' (' + a.count + ' / min ' + a.min + ')' }).join(', '))
+  }
+  if (driveResult && driveResult.folderUrl) {
+    lines.push('📁 Evidence: ' + driveResult.folderUrl)
+  }
+  sendSlackMessage(getSlackChannel(data), lines.join('\n'))
+}
+
+function sendAssetSlack(data) {
+  var isUrgent = !data.working_properly || data.condition === 'Poor'
+  var prefix   = isUrgent ? '⚠️' : '✅'
+  var lines    = [
+    prefix + ' *Equipment Log — ' + data.location + '*',
+    'ID: *' + data.equipment_id + '*  |  Condition: ' + data.condition,
+  ]
+  if (!data.working_properly) lines.push('🔧 *Not working — repair needed*')
+  if (data.filter_needed)     lines.push('🔩 Filter replacement needed')
+  if (data.notes)             lines.push('Notes: ' + data.notes)
+  sendSlackMessage(getSlackChannel(data), lines.join('\n'))
+}
+
+function sendInventorySlack(data) {
+  var unchecked = data.unchecked_items || []
+  var prefix    = unchecked.length > 0 ? '🚨' : '✅'
+  var lines     = [
+    prefix + ' *Supply Check — ' + data.location + '*',
+  ]
+  if (unchecked.length > 0) {
+    lines.push('*' + unchecked.length + ' item' + (unchecked.length > 1 ? 's' : '') + ' flagged as NEEDED:*')
+    unchecked.forEach(function(item) {
+      lines.push('  • ' + item.label + (item.note ? ' — ' + item.note : ''))
+    })
+  } else {
+    lines.push('All supplies are stocked ✓')
+  }
+  sendSlackMessage(getSlackChannel(data), lines.join('\n'))
+}
+
+
 // ── Entry point ───────────────────────────────────────────────────────────────
 
 function doPost(e) {
@@ -85,14 +177,17 @@ function doPost(e) {
       var driveResult = uploadPhotosToDrive(data)
       logInspectionToSheet(data, driveResult)
       sendInspectionEmail(data, driveResult)
+      sendInspectionSlack(data, driveResult)
 
     } else if (type === 'asset') {
       logAssetToSheet(data)
       sendAssetEmail(data)
+      sendAssetSlack(data)
 
     } else if (type === 'inventory') {
       logInventoryToSheet(data)
       sendInventoryEmail(data)
+      sendInventorySlack(data)
     }
 
     return ContentService
@@ -164,19 +259,21 @@ function buildDashboardData() {
   var invByLocation = {}
   var invSheet = ss.getSheetByName(SHEET_INVENTORY)
   if (invSheet && invSheet.getLastRow() > 1) {
-    var invRows = invSheet.getRange(2, 1, invSheet.getLastRow() - 1, 11).getValues()
+    var invRows = invSheet.getRange(2, 1, invSheet.getLastRow() - 1, 12).getValues()
     for (var i = 0; i < invRows.length; i++) {
       var r = invRows[i]
       var loc = r[3]
       var ts  = r[0]
       if (!invByLocation[loc] || ts > invByLocation[loc].ts) {
+        var suppliesJson = r[11] ? String(r[11]) : null
+        var suppliesMap  = null
+        if (suppliesJson) {
+          try { suppliesMap = JSON.parse(suppliesJson) } catch (_) { suppliesMap = null }
+        }
         invByLocation[loc] = {
-          ts:            ts,
-          date:          r[1] instanceof Date ? Utilities.formatDate(r[1], SCRIPT_TZ, 'MM/dd/yyyy') : String(r[1]),
-          multi_surface: Number(r[4]) || 0,
-          paper_towels:  Number(r[5]) || 0,
-          liners:        Number(r[6]) || 0,
-          disinfectant:  Number(r[7]) || 0,
+          ts:          ts,
+          date:        r[1] instanceof Date ? Utilities.formatDate(r[1], SCRIPT_TZ, 'MM/dd/yyyy') : String(r[1]),
+          suppliesMap: suppliesMap,
         }
       }
     }
@@ -242,34 +339,27 @@ function buildDashboardData() {
     var assets = assetsByLocation[location] || []
     var insp   = inspByLocation[location]
 
-    // Supply snapshot
-    var supplyItems = SUPPLY_ITEMS.map(function(item) {
-      var count = inv ? (inv[item.id] !== undefined ? inv[item.id] : null) : null
-      return {
-        id:      item.id,
-        label:   item.label,
-        unit:    item.unit,
-        min:     item.min,
-        count:   count,
-        isAlert: count !== null && count < item.min,
-      }
-    })
-
     // Equipment list (strip internal ts field)
     var equipmentList = assets.map(function(a) {
       return {
-        id:             a.id,
-        condition:      a.condition,
+        id:              a.id,
+        condition:       a.condition,
         workingProperly: a.workingProperly,
-        filterNeeded:   a.filterNeeded,
-        lastInspected:  a.lastInspected,
-        notes:          a.notes,
+        filterNeeded:    a.filterNeeded,
+        lastInspected:   a.lastInspected,
+        notes:           a.notes,
       }
     })
 
-    // Status logic
-    var hasReorderAlert = supplyItems.some(function(s) { return s.isAlert })
-    var hasEquipIssue   = assets.some(function(a) { return !a.workingProperly })
+    // Derive supply alert count from the supplies map
+    var suppliesMap = (inv && inv.suppliesMap) ? inv.suppliesMap : null
+    var hasReorderAlert = suppliesMap
+      ? Object.keys(suppliesMap).some(function(id) {
+          var entry = suppliesMap[id]
+          return entry && entry.checked === false
+        })
+      : false
+    var hasEquipIssue    = assets.some(function(a) { return !a.workingProperly })
     var hasPoorCondition = assets.some(function(a) { return a.condition === 'Poor' })
     var hasFairCondition = assets.some(function(a) { return a.condition === 'Fair' })
 
@@ -289,7 +379,7 @@ function buildDashboardData() {
       status:         status,
       lastInspection: insp ? { date: insp.date, grade: insp.grade, totalScore: insp.totalScore } : null,
       inventoryDate:  inv ? inv.date : null,
-      inventory:      supplyItems,
+      supplies:       suppliesMap,
       equipment:      equipmentList,
     }
   })
@@ -614,7 +704,7 @@ function sendAssetEmail(data) {
 var INVENTORY_HEADERS = [
   'Timestamp', 'Date', 'Time', 'Location',
   'Multi-Surface', 'Paper Towels', 'Liners', 'Disinfectant',
-  'Alert Items', 'Notes', 'Email Sent',
+  'Alert Items', 'Notes', 'Email Sent', 'Supplies JSON',
 ]
 
 function logInventoryToSheet(data) {
@@ -625,66 +715,75 @@ function logInventoryToSheet(data) {
     initSheetHeaders(sheet, INVENTORY_HEADERS, '#7c2d12')
   }
 
-  var ts      = new Date(data.timestamp)
-  var inv     = data.inventory || {}
-  var alertStr = (data.inventory_alerts || []).map(function(a) {
-    return a.label + ': ' + a.count + ' (min ' + a.min + ')'
-  }).join(' | ')
+  var ts       = new Date(data.timestamp)
+  var supplies = data.supplies || {}
+  var unchecked = data.unchecked_items || []
+  var alertStr  = unchecked.map(function(a) { return a.label }).join(' | ')
+
+  // Legacy numeric columns: derive YES/NO from boolean supply checks
+  function supplyVal(id) {
+    var entry = supplies[id]
+    if (!entry) return ''
+    return entry.checked ? 'YES' : 'NO'
+  }
 
   sheet.appendRow([
     data.timestamp,
     Utilities.formatDate(ts, SCRIPT_TZ, 'MM/dd/yyyy'),
     Utilities.formatDate(ts, SCRIPT_TZ, 'hh:mm a'),
     data.location,
-    inv.multi_surface  || 0,
-    inv.paper_towels   || 0,
-    inv.liners         || 0,
-    inv.disinfectant   || 0,
+    supplyVal('multi_surface_cleaner'),
+    supplyVal('paper_towels'),
+    supplyVal('trash_liners'),
+    '',
     alertStr,
     data.notes || '',
     'Sent to ' + OWNER_EMAIL,
+    JSON.stringify(supplies),
   ])
 }
 
 function sendInventoryEmail(data) {
-  var alerts    = data.inventory_alerts || []
-  var hasAlerts = alerts.length > 0
-  var inv       = data.inventory || {}
+  var unchecked = data.unchecked_items || []
+  var supplies  = data.supplies || {}
+  var hasAlerts = unchecked.length > 0
 
   // ── RED ALERT top block ───────────────────────────────────────────────────
   var alertBlock = ''
   if (hasAlerts) {
-    var alertRows = alerts.map(function(a) {
+    var alertRows = unchecked.map(function(item) {
       return '<tr>'
-        + '<td style="padding:8px 16px;border-bottom:1px solid #7f1d1d;color:#fecaca;font-weight:bold;">' + a.label + '</td>'
-        + '<td style="padding:8px 16px;border-bottom:1px solid #7f1d1d;color:#fca5a5;text-align:center;">' + a.count + ' ' + a.unit + '</td>'
-        + '<td style="padding:8px 16px;border-bottom:1px solid #7f1d1d;color:#f87171;text-align:center;">Need ≥ ' + a.min + '</td>'
+        + '<td style="padding:8px 16px;border-bottom:1px solid #7f1d1d;color:#fecaca;font-weight:bold;">' + escapeHtml(item.label) + '</td>'
+        + '<td style="padding:8px 16px;border-bottom:1px solid #7f1d1d;color:#fca5a5;">' + (item.note ? escapeHtml(item.note) : '—') + '</td>'
         + '</tr>'
     }).join('')
 
     alertBlock = ''
       + '<div style="background:#450a0a;border:2px solid #dc2626;border-radius:10px;padding:20px;margin-bottom:20px;">'
-      +   '<div style="color:#ef4444;font-size:18px;font-weight:900;margin-bottom:12px;">🚨 RED ALERT — REORDER REQUIRED</div>'
+      +   '<div style="color:#ef4444;font-size:18px;font-weight:900;margin-bottom:12px;">🚨 RED ALERT — ITEMS NEEDED</div>'
       +   '<table style="width:100%;border-collapse:collapse;">'
       +     '<thead><tr style="background:#7f1d1d;">'
       +       '<th style="padding:8px 16px;text-align:left;color:#fca5a5;font-size:12px;">Supply Item</th>'
-      +       '<th style="padding:8px 16px;text-align:center;color:#fca5a5;font-size:12px;">In Stock</th>'
-      +       '<th style="padding:8px 16px;text-align:center;color:#fca5a5;font-size:12px;">Minimum</th>'
+      +       '<th style="padding:8px 16px;text-align:left;color:#fca5a5;font-size:12px;">Note</th>'
       +     '</tr></thead>'
       +     '<tbody>' + alertRows + '</tbody>'
       +   '</table>'
       + '</div>'
   }
 
-  var supplyRows = SUPPLY_ITEMS.map(function(item) {
-    var count = inv[item.id] || 0
-    var isLow = count < item.min
-    var bg    = isLow ? '#fee2e2' : count < item.min * 1.5 ? '#fef9c3' : '#dcfce7'
-    var fg    = isLow ? '#7f1d1d' : count < item.min * 1.5 ? '#78350f' : '#14532d'
+  // ── Full supply status table ──────────────────────────────────────────────
+  var supplyRows = Object.keys(supplies).map(function(id) {
+    var entry   = supplies[id]
+    var checked = entry && entry.checked !== false
+    var note    = (entry && entry.note) ? entry.note : ''
+    var label   = id.replace(/_/g, ' ').replace(/\b\w/g, function(c) { return c.toUpperCase() })
+    var bg      = checked ? '#dcfce7' : '#fee2e2'
+    var fg      = checked ? '#14532d' : '#7f1d1d'
+    var status  = checked ? 'OK' : 'NEEDED'
     return '<tr>'
-      + '<td style="padding:9px 16px;border-bottom:1px solid #f3f4f6;font-size:13px;color:#111827;">' + item.label + '</td>'
-      + '<td style="padding:9px 16px;border-bottom:1px solid #f3f4f6;text-align:center;background:' + bg + ';color:' + fg + ';font-weight:bold;">' + count + ' ' + item.unit + '</td>'
-      + '<td style="padding:9px 16px;border-bottom:1px solid #f3f4f6;text-align:center;color:#6b7280;font-size:12px;">Min: ' + item.min + '</td>'
+      + '<td style="padding:9px 16px;border-bottom:1px solid #f3f4f6;font-size:13px;color:#111827;">' + escapeHtml(label) + '</td>'
+      + '<td style="padding:9px 16px;border-bottom:1px solid #f3f4f6;text-align:center;background:' + bg + ';color:' + fg + ';font-weight:bold;">' + status + '</td>'
+      + '<td style="padding:9px 16px;border-bottom:1px solid #f3f4f6;font-size:12px;color:#6b7280;">' + escapeHtml(note) + '</td>'
       + '</tr>'
   }).join('')
 
@@ -698,15 +797,15 @@ function sendInventoryEmail(data) {
     + '<table style="width:100%;border-collapse:collapse;border:1px solid #e5e7eb;border-top:none;">'
     +   '<thead><tr style="background:#f8fafc;">'
     +     '<th style="padding:10px 16px;text-align:left;font-size:12px;color:#374151;border-bottom:2px solid #e5e7eb;">Supply Item</th>'
-    +     '<th style="padding:10px 16px;text-align:center;font-size:12px;color:#374151;border-bottom:2px solid #e5e7eb;">In-Stock Count</th>'
-    +     '<th style="padding:10px 16px;text-align:center;font-size:12px;color:#374151;border-bottom:2px solid #e5e7eb;">Minimum</th>'
+    +     '<th style="padding:10px 16px;text-align:center;font-size:12px;color:#374151;border-bottom:2px solid #e5e7eb;">Status</th>'
+    +     '<th style="padding:10px 16px;text-align:left;font-size:12px;color:#374151;border-bottom:2px solid #e5e7eb;">Note</th>'
     +   '</tr></thead>'
     +   '<tbody>' + supplyRows + '</tbody>'
     + '</table>'
     + (data.notes ? '<div style="background:#f8fafc;border:1px solid #e5e7eb;border-radius:8px;padding:14px 18px;margin-top:16px;font-size:13px;color:#4b5563;"><strong>Notes:</strong> ' + escapeHtml(data.notes) + '</div>' : '')
 
   var subject = (hasAlerts ? '🚨 [REORDER ALERT] ' : '[Shreve Inventory] ')
-    + data.location + ' Stock-Take — '
+    + data.location + ' Supply Check — '
     + Utilities.formatDate(new Date(data.timestamp), SCRIPT_TZ, 'M/d/yyyy')
 
   MailApp.sendEmail({ to: OWNER_EMAIL, subject: subject, htmlBody: emailWrapper(body) })
