@@ -67,7 +67,17 @@ function InventorySnapshot({ supplies, date }) {
                     </span>
                   </div>
                   {!checked
-                    ? <span className="text-xs font-bold text-red-600 bg-red-100 border border-red-200 px-2 py-0.5 rounded-full flex-shrink-0">NEEDED</span>
+                    ? (
+                      <div className="flex items-center gap-1.5 flex-shrink-0">
+                        <span className="text-xs font-bold text-red-600 bg-red-100 border border-red-200 px-2 py-0.5 rounded-full">NEEDED</span>
+                        {item.link && (
+                          <a href={item.link} target="_blank" rel="noopener noreferrer"
+                            className="text-xs font-semibold text-blue-600 hover:text-blue-800 underline whitespace-nowrap">
+                            Order →
+                          </a>
+                        )}
+                      </div>
+                    )
                     : <span className="text-xs font-semibold text-green-600 bg-green-50 border border-green-200 px-2 py-0.5 rounded-full flex-shrink-0">OK</span>
                   }
                 </div>

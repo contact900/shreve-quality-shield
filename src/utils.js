@@ -21,18 +21,19 @@ export const LOCATION_SLACK_CHANNELS = {
 
 // frequency: 'month' → "Enough for a month?", 'facility' → "Enough for facility?"
 // consumable: true → grouped label "Consumable" in UI
+// link: purchase URL shown as "Order →" in the dashboard when item is flagged NEEDED
 export const SUPPLY_ITEMS = [
-  { id: 'multi_surface_cleaner', label: 'Multi Surface Cleaner Bottle', frequency: 'month'    },
-  { id: 'blue_microfibers',      label: 'Blue Microfibers',             frequency: 'month'    },
-  { id: 'red_microfibers',       label: 'Red Microfibers',              frequency: 'month'    },
-  { id: 'toilet_cleaner',        label: 'Toilet Cleaner',               frequency: 'month'    },
-  { id: 'vacuums',               label: 'Vacuums',                      frequency: 'facility' },
-  { id: 'clean_mop_heads',       label: 'Clean Mop Heads',              frequency: 'month'    },
-  { id: 'mop_buckets_handles',   label: 'Mop Buckets and Handles',      frequency: 'facility' },
-  { id: 'paper_towels',          label: 'Paper Towels',                 frequency: 'month',    consumable: true },
-  { id: 'toilet_paper',          label: 'Toilet Paper',                 frequency: 'month',    consumable: true },
-  { id: 'soap',                  label: 'Soap',                         frequency: 'month',    consumable: true },
-  { id: 'trash_liners',          label: 'Trash Liner',                  frequency: 'month',    consumable: true },
+  { id: 'multi_surface_cleaner', label: 'Multi Surface Cleaner Bottle', frequency: 'month',    link: '' },
+  { id: 'blue_microfibers',      label: 'Blue Microfibers',             frequency: 'month',    link: '' },
+  { id: 'red_microfibers',       label: 'Red Microfibers',              frequency: 'month',    link: '' },
+  { id: 'toilet_cleaner',        label: 'Toilet Cleaner',               frequency: 'month',    link: '' },
+  { id: 'vacuums',               label: 'Vacuums',                      frequency: 'facility', link: '' },
+  { id: 'clean_mop_heads',       label: 'Clean Mop Heads',              frequency: 'month',    link: '' },
+  { id: 'mop_buckets_handles',   label: 'Mop Buckets and Handles',      frequency: 'facility', link: '' },
+  { id: 'paper_towels',          label: 'Paper Towels',                 frequency: 'month',    link: '', consumable: true },
+  { id: 'toilet_paper',          label: 'Toilet Paper',                 frequency: 'month',    link: '', consumable: true },
+  { id: 'soap',                  label: 'Soap',                         frequency: 'month',    link: '', consumable: true },
+  { id: 'trash_liners',          label: 'Trash Liner',                  frequency: 'month',    link: '', consumable: true },
 ]
 
 // ── Image helpers ─────────────────────────────────────────────────────────────
