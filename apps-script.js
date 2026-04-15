@@ -99,13 +99,15 @@ var LOCATION_SLACK_CHANNELS = {
 function sendSlackMessage(channel, text) {
   if (!SLACK_BOT_TOKEN || SLACK_BOT_TOKEN === 'YOUR_SLACK_BOT_TOKEN') return
   try {
-    UrlFetchApp.fetch('https://slack.com/api/chat.postMessage', {
+    var resp = UrlFetchApp.fetch('https://slack.com/api/chat.postMessage', {
       method: 'post',
       contentType: 'application/json',
       headers: { 'Authorization': 'Bearer ' + SLACK_BOT_TOKEN },
       payload: JSON.stringify({ channel: channel, text: text }),
       muteHttpExceptions: true,
     })
+    var body = JSON.parse(resp.getContentText())
+    if (!body.ok) Logger.log('Slack API error: ' + body.error + ' (channel: ' + channel + ')')
   } catch (err) {
     Logger.log('Slack error: ' + err.message)
   }
@@ -175,19 +177,19 @@ function doPost(e) {
 
     if (type === 'inspection') {
       var driveResult = uploadPhotosToDrive(data)
-      logInspectionToSheet(data, driveResult)
-      sendInspectionEmail(data, driveResult)
-      sendInspectionSlack(data, driveResult)
+      try { logInspectionToSheet(data, driveResult) } catch (e) { Logger.log('logInspectionToSheet error: ' + e.message) }
+      try { sendInspectionEmail(data, driveResult)  } catch (e) { Logger.log('sendInspectionEmail error: '  + e.message) }
+      try { sendInspectionSlack(data, driveResult)  } catch (e) { Logger.log('sendInspectionSlack error: '  + e.message) }
 
     } else if (type === 'asset') {
-      logAssetToSheet(data)
-      sendAssetEmail(data)
-      sendAssetSlack(data)
+      try { logAssetToSheet(data) } catch (e) { Logger.log('logAssetToSheet error: ' + e.message) }
+      try { sendAssetEmail(data)  } catch (e) { Logger.log('sendAssetEmail error: '  + e.message) }
+      try { sendAssetSlack(data)  } catch (e) { Logger.log('sendAssetSlack error: '  + e.message) }
 
     } else if (type === 'inventory') {
-      logInventoryToSheet(data)
-      sendInventoryEmail(data)
-      sendInventorySlack(data)
+      try { logInventoryToSheet(data) } catch (e) { Logger.log('logInventoryToSheet error: ' + e.message) }
+      try { sendInventoryEmail(data)  } catch (e) { Logger.log('sendInventoryEmail error: '  + e.message) }
+      try { sendInventorySlack(data)  } catch (e) { Logger.log('sendInventorySlack error: '  + e.message) }
     }
 
     return ContentService
